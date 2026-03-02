@@ -511,11 +511,42 @@ func (opts *WorkerStartOptions) runLocalForeground(ctx context.Context) error {
 		}
 	} else if opts.LocalWheel != "" {
 		// Backward compatibility: --local-wheel
-		if _, err := os.Stat(opts.LocalWheel); os.IsNotExist(err) {
-			return fmt.Errorf("local wheel file not found: %s", opts.LocalWheel)
+		fileInfo, err := os.Stat(opts.LocalWheel)
+		if os.IsNotExist(err) {
+			return fmt.Errorf("local wheel path not found: %s", opts.LocalWheel)
 		}
-		packageSpec = opts.LocalWheel + "[worker]"
-		sourceDisplay = fmt.Sprintf("local file: %s", opts.LocalWheel)
+
+		wheelPath := opts.LocalWheel
+
+		// If it's a directory, look for wheel files in dist/ subdirectory
+		if fileInfo.IsDir() {
+			distDir := filepath.Join(opts.LocalWheel, "dist")
+			entries, err := os.ReadDir(distDir)
+			if err != nil {
+				return fmt.Errorf("failed to read dist directory %s: %w (run 'python -m build --wheel --outdir dist/' first)", distDir, err)
+			}
+
+			// Find the latest .whl file by name (assumes higher versions sort last)
+			var latestWheel string
+			for _, entry := range entries {
+				if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".whl") {
+					candidate := filepath.Join(distDir, entry.Name())
+					if latestWheel == "" || entry.Name() > filepath.Base(latestWheel) {
+						latestWheel = candidate
+					}
+				}
+			}
+
+			if latestWheel == "" {
+				return fmt.Errorf("no wheel file found in %s - run 'python -m build --wheel --outdir dist/' first", distDir)
+			}
+
+			wheelPath = latestWheel
+			logger.Debug("Found wheel in directory", "wheel", latestWheel)
+		}
+
+		packageSpec = wheelPath + "[worker]"
+		sourceDisplay = fmt.Sprintf("local file: %s", filepath.Base(wheelPath))
 		forceReinstall = true
 	} else if opts.PackageVersion != "" {
 		// Backward compatibility: --package-version
